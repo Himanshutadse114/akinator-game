@@ -180,7 +180,10 @@ function yesAttrsFrom(session) {
 
 async function nextStep(session) {
   const askedCount = Object.keys(session.asked).length;
-  if (session.candidates.length === 1 || askedCount >= MAX_QUESTIONS || session.candidates.length <= 3) {
+  const outOfQuestions = !questions.some((q) => !(q.id in session.asked));
+  // Only guess when there's a single clear winner, or we've truly run out of
+  // questions. Never guess early just because few candidates remain — keep digging.
+  if (session.candidates.length <= 1 || askedCount >= MAX_QUESTIONS || outOfQuestions) {
     const guess = await pickGuess(session);
     if (!guess) return { type: 'stumped', sessionId: session.id, yesAttrs: yesAttrsFrom(session) };
     session.lastGuess = guess.id;
