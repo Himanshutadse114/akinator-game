@@ -1,0 +1,90 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: Georgia, 'Times New Roman', serif;
+  background: radial-gradient(1200px 800px at 50% -10%, #2b2160 0%, #141034 45%, #0a0820 100%);
+  color: #f0e9d8;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.stars {
+  position: fixed; inset: 0; pointer-events: none;
+  background-image:
+    radial-gradient(1px 1px at 20% 30%, #fff8, transparent),
+    radial-gradient(1px 1px at 60% 70%, #fff6, transparent),
+    radial-gradient(2px 2px at 80% 20%, #ffe9a8aa, transparent),
+    radial-gradient(1px 1px at 35% 85%, #fff5, transparent),
+    radial-gradient(1px 1px at 90% 55%, #fff7, transparent);
+}
+
+.wrap { position: relative; width: 100%; max-width: 540px; text-align: center; }
+
+.pill {
+  display: inline-block;
+  font-family: system-ui, sans-serif;
+  font-size: 12px; letter-spacing: 1px; text-transform: uppercase;
+  padding: 6px 14px; border-radius: 999px; margin-bottom: 28px;
+  border: 1px solid #ffffff2e;
+}
+.pill.jev { color: #9df0b6; border-color: #9df0b655; background: #9df0b611; }
+.pill.local { color: #ffd98a; border-color: #ffd98a55; background: #ffd98a11; }
+
+.screen.hidden { display: none; }
+
+.orb {
+  width: 110px; height: 110px; margin: 0 auto 24px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #cfd8ff 0%, #7f8fe8 25%, #3b2f8f 60%, #141034 100%);
+  box-shadow: 0 0 60px #7f8fe866, 0 0 140px #7f8fe833, inset -8px -10px 30px #00000088;
+}
+.orb.pulse { animation: pulse 1.6s ease-in-out infinite; }
+.orb.dim { filter: grayscale(0.7) brightness(0.7); }
+@keyframes pulse { 50% { transform: scale(1.08); box-shadow: 0 0 90px #a99fff88, 0 0 180px #a99fff44; } }
+
+h1 { font-size: 40px; letter-spacing: 1px; color: #f5d67b; margin-bottom: 12px; text-shadow: 0 2px 20px #f5d67b33; }
+h2.question { font-size: 30px; line-height: 1.35; margin: 8px 0 28px; min-height: 84px; }
+h2.guess-name { font-size: 36px; color: #f5d67b; margin: 6px 0; }
+.tag { color: #cfc6ec; font-size: 18px; line-height: 1.6; margin-bottom: 24px; }
+.tag.small { font-size: 14px; margin: 14px 0 8px; }
+.tag code { background: #ffffff18; padding: 2px 8px; border-radius: 6px; font-size: 15px; }
+.progress { font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #9d92c9; margin-bottom: 16px; }
+.kind { font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #9d92c9; margin-bottom: 24px; }
+.big-emoji { font-size: 84px; margin-bottom: 8px; }
+.hint { margin-top: 22px; font-size: 13px; color: #8f86b8; font-family: system-ui, sans-serif; }
+
+.btnrow { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+.btn {
+  font-family: system-ui, sans-serif;
+  font-size: 17px; font-weight: 600;
+  padding: 13px 34px; border-radius: 999px;
+  border: 1px solid #ffffff2c; cursor: pointer;
+  background: #ffffff14; color: #f0e9d8;
+  transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
+}
+.btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px #00000066; }
+.btn.gold { background: linear-gradient(180deg, #f5d67b, #d9a93f); color: #2a1f08; border: none; font-size: 19px; padding: 15px 52px; }
+.btn.yes { background: linear-gradient(180deg, #57c98a, #2f9e5f); border: none; color: #062b16; }
+.btn.no { background: linear-gradient(180deg, #e0685f, #b03a32); border: none; color: #2b0a06; }
+.btn.ghost { background: transparent; }
+
+.form { max-width: 420px; margin: 0 auto; text-align: left; }
+.form input[type="text"] {
+  width: 100%; padding: 13px 16px; border-radius: 12px;
+  border: 1px solid #ffffff2c; background: #ffffff0d; color: #f0e9d8;
+  font-size: 17px; font-family: system-ui, sans-serif; margin-bottom: 12px;
+}
+.kinds { display: flex; gap: 22px; margin-bottom: 6px; font-family: system-ui, sans-serif; font-size: 15px; }
+.kinds input { accent-color: #f5d67b; }
+.attrs { display: grid; gap: 8px; margin-bottom: 18px; max-height: 220px; overflow-y: auto; }
+.attrs label {
+  font-family: system-ui, sans-serif; font-size: 14px; color: #cfc6ec;
+  background: #ffffff0a; border: 1px solid #ffffff1a; border-radius: 10px; padding: 9px 12px;
+  cursor: pointer;
+}
+.attrs input { accent-color: #f5d67b; margin-right: 6px; }
+.form .btn { margin-top: 8px; }
+.form .tag.small { text-align: center; }
