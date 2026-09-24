@@ -1,0 +1,1 @@
+{"dependencies":{"express":"^4.19.2"},"description":"Akinator-style character guessing game with optional Jev (TypeSafe AI) question picking","main":"server.js","name":"akinator-game","scripts":{"start":"node server.js"},"version":"1.0.0"}
