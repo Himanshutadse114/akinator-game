@@ -1,6 +1,7 @@
-// Akinator-style guessing game backend.
-// Optional Jev (TypeSafe AI) integration: set TYPESAFE_API_KEY to let Jev pick
-// questions and guesses. The key never leaves the server.
+// Akinator-style guessing game + Jev decision showcase.
+// Every decision Jev makes (which question to ask, whether to guess yet,
+// who the final guess is) is logged with probabilities and latency, and
+// returned to the frontend so you can watch the decision model think.
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -11,301 +12,384 @@ const DATA_DIR = path.join(__dirname, 'data');
 const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 const JEV_TIMEOUT_MS = 8000;
 const MAX_QUESTIONS = 20;
+const MIN_QUESTIONS_BEFORE_GUESS = 4;
+const GUESS_CONFIDENCE_THRESHOLD = 0.7;
+const JEV_MAX_OPTIONS = 150; // comfortably under the 255-per-call limit
 
 const app = express();
 app.use(express.json());
 
-function loadJson(file, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
+// ---------- data ----------
+const characters = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'characters.json'), 'utf8'));
+const questions = JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'questions.json'), 'utf8'));
+const CUSTOM_PATH = path.join(DATA_DIR, 'custom.json');
+let custom = [];
+try { custom = JSON.parse(fs.readFileSync(CUSTOM_PATH, 'utf8')); } catch { custom = []; }
+const allCharacters = () => characters.concat(custom);
+const byId = id => allCharacters().find(c => c.id === id);
+const questionById = id => questions.find(q => q.id === id);
 
-const seedCharacters = loadJson('characters.json', []);
-const questions = loadJson('questions.json', []);
-let customCharacters = loadJson('custom.json', []);
-if (!Array.isArray(customCharacters)) customCharacters = [];
-
-const allCharacters = () => seedCharacters.concat(customCharacters);
-const charById = (id) => allCharacters().find((c) => c.id === id);
-const questionById = (id) => questions.find((q) => q.id === id);
-const hasAttr = (c, attr) => Boolean(c && c.attrs && c.attrs[attr]);
-
-const sessions = new Map();
-const newSessionId = () => crypto.randomBytes(8).toString('hex');
-// Trim: on Windows `set KEY=value && npm start` can sneak a trailing space into the value.
+// ---------- Jev ----------
 const JEV_KEY = (process.env.TYPESAFE_API_KEY || '').trim();
 const jevAvailable = () => Boolean(JEV_KEY);
-let jevLastError = null; // surfaced via /api/status so failures are visible, not silent
+let jevLastError = null;
 
-// ---------- Jev helpers ----------
 async function jevCall(body) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), JEV_TIMEOUT_MS);
+  const t0 = Date.now();
   try {
     const res = await fetch(JEV_URL, {
       method: 'POST',
-      headers: {
-        Authorization: 'Bearer ' + JEV_KEY,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${JEV_KEY}` },
+      body: JSON.stringify({ model: 'jev-latest', ...body }),
       signal: controller.signal,
-      body: JSON.stringify(body),
     });
+    const ms = Date.now() - t0;
     if (!res.ok) {
-      const snippet = (await res.text()).slice(0, 200);
-      jevLastError = `HTTP ${res.status}: ${snippet}`;
-      console.warn(`[jev] API error ${res.status}: ${snippet}`);
-      return null;
+      const text = await res.text().catch(() => '');
+      jevLastError = `HTTP ${res.status}: ${text.slice(0, 200)}`;
+      console.error('[jev]', jevLastError);
+      return { error: jevLastError, ms };
     }
     jevLastError = null;
-    return await res.json();
+    return { data: await res.json(), ms };
   } catch (err) {
-    jevLastError = `network/timeout: ${err && err.message ? err.message : err}`;
-    console.warn(`[jev] network error: ${jevLastError}`);
-    return null; // network error / timeout -> caller falls back
+    const ms = Date.now() - t0;
+    jevLastError = `Network/timeout: ${err.message}`;
+    console.error('[jev]', jevLastError);
+    return { error: jevLastError, ms };
   } finally {
     clearTimeout(timer);
   }
 }
 
+function logJev(session, entry) {
+  session.jev.push({ at: new Date().toISOString(), ...entry });
+}
+
 function historyText(session) {
-  const lines = Object.entries(session.asked).map(([qid, ans]) => {
-    const q = questionById(qid);
-    return `- "${q ? q.text : qid}" -> ${ans}`;
-  });
-  return lines.length ? lines.join('\n') : '(no answers yet)';
+  return session.history
+    .map(h => `Q: ${h.question} -> ${h.answer}`)
+    .join('\n') || '(no answers yet)';
 }
 
-async function jevPickQuestion(session) {
-  const unasked = questions.filter((q) => !(q.id in session.asked));
-  if (!unasked.length) return null;
-  const names = session.candidates.map((id) => {
-    const c = charById(id);
-    return c ? c.name : id;
-  });
-  const criteria = {};
-  unasked.forEach((q) => {
-    criteria[q.id] = q.text;
-  });
-  const data = await jevCall({
-    model: 'jev-latest',
-    state:
-      `The player is thinking of a character. Remaining candidates (${names.length}): ${names.join(', ')}.\n` +
-      `Answers so far:\n${historyText(session)}`,
-    questions: {
-      pick: {
-        type: 'choice',
-        instructions:
-          'Which question, if answered, would best narrow down which character the player is thinking of?',
-        criteria,
-      },
-    },
-  });
-  const choice = data && data.answers && data.answers.pick && data.answers.pick.choice;
-  if (choice && unasked.some((q) => q.id === choice)) return choice;
-  return null;
-}
-
-// Fallback (also used when no API key): information gain —
-// pick the unasked question whose yes/no split is closest to 50/50.
-function fallbackPickQuestion(session) {
-  const unasked = questions.filter((q) => !(q.id in session.asked));
-  if (!unasked.length) return null;
-  const n = session.candidates.length;
-  const shuffled = unasked.slice().sort(() => Math.random() - 0.5); // random tiebreak
-  let best = null;
-  let bestScore = -Infinity;
-  for (const q of shuffled) {
-    const yes = session.candidates.filter((id) => hasAttr(charById(id), q.attr)).length;
-    const score = -Math.abs(yes - (n - yes));
-    if (score > bestScore) {
-      bestScore = score;
-      best = q;
-    }
-  }
-  return best ? best.id : null;
-}
-
+// Decision 1: which question to ask next (Jev choice over unasked questions).
 async function pickNextQuestion(session) {
-  if (jevAvailable()) {
-    const qid = await jevPickQuestion(session);
-    if (qid) return questionById(qid);
-  }
-  const qid = fallbackPickQuestion(session);
-  return qid ? questionById(qid) : null;
-}
+  const unasked = questions.filter(q => !(q.id in session.asked));
+  if (!unasked.length) return null;
 
-async function pickGuess(session) {
-  const cands = session.candidates.map(charById).filter(Boolean);
-  if (!cands.length) return null;
-  if (cands.length === 1) return cands[0];
   if (jevAvailable()) {
+    const state =
+      `You are playing a 20-questions character guessing game.\n` +
+      `Candidates remaining: ${session.candidates.length}. ` +
+      `Questions asked so far: ${Object.keys(session.asked).length}.\n` +
+      `Answer history:\n${historyText(session)}`;
     const criteria = {};
-    cands.forEach((c) => {
-      criteria[c.id] = c.name;
-    });
-    const data = await jevCall({
-      model: 'jev-latest',
-      state:
-        `The player is thinking of a character. Candidates: ${cands.map((c) => c.name).join(', ')}.\n` +
-        `Answers so far:\n${historyText(session)}`,
+    for (const q of unasked) criteria[q.id] = q.text;
+    const { data, ms, error } = await jevCall({
+      state,
       questions: {
-        guess: {
+        next_question: {
           type: 'choice',
-          instructions: 'Which character is the player most likely thinking of?',
+          instructions: 'Pick the single question that will best narrow down who the player is thinking of.',
           criteria,
         },
       },
     });
-    const choice = data && data.answers && data.answers.guess && data.answers.guess.choice;
-    const picked = cands.find((c) => c.id === choice);
-    if (picked) return picked;
+    const ans = data && data.answers && data.answers.next_question;
+    if (!error && ans && ans.choice && questionById(ans.choice)) {
+      const probs = Object.entries(ans.probabilities || {})
+        .map(([id, p]) => ({ label: questionById(id) ? questionById(id).text : id, p }))
+        .sort((a, b) => b.p - a.p)
+        .slice(0, 5);
+      logJev(session, {
+        kind: 'pick',
+        title: 'Jev picked the next question',
+        detail: questionById(ans.choice).text,
+        probs,
+        confidence: ans.confidence,
+        ms,
+        fallback: false,
+      });
+      return questionById(ans.choice);
+    }
+    if (error) console.error('[jev] pick failed, using local fallback');
   }
-  return cands[0];
+
+  // Local fallback: max information gain.
+  const q = bestQuestionInfoGain(session);
+  logJev(session, {
+    kind: 'pick',
+    title: 'Next question (local brain)',
+    detail: q ? q.text : 'none left',
+    probs: [],
+    confidence: null,
+    ms: 0,
+    fallback: true,
+  });
+  return q;
 }
 
-function yesAttrsFrom(session) {
-  const out = [];
-  for (const [qid, ans] of Object.entries(session.asked)) {
-    if (ans === 'yes') {
-      const q = questionById(qid);
-      if (q) out.push({ attr: q.attr, text: q.text });
-    }
+// Decision 2: guess now or keep asking? (Jev yes/no probability.)
+async function jevShouldGuess(session) {
+  const names = session.candidates.map(byId).filter(Boolean).map(c => c.name);
+  const shown = names.slice(0, 80);
+  const state =
+    `You are playing a 20-questions character guessing game.\n` +
+    `Questions asked: ${Object.keys(session.asked).length} of ${MAX_QUESTIONS}.\n` +
+    `Candidates remaining: ${names.length}` +
+    (names.length > shown.length ? ` (showing ${shown.length}): ${shown.join(', ')}` : `: ${shown.join(', ')}`) + `\n` +
+    `Answer history:\n${historyText(session)}`;
+  const { data, ms, error } = await jevCall({
+    state,
+    questions: {
+      should_guess: {
+        type: 'noul',
+        instructions: 'Given the answers so far and the remaining candidates, are you confident enough to make the final guess NOW instead of asking another question?',
+      },
+    },
+  });
+  const ans = data && data.answers && data.answers.should_guess;
+  if (!error && ans && typeof ans.noul === 'number') {
+    return { p: ans.noul, ms, fallback: false };
   }
-  return out;
+  return { p: 0, ms: ms || 0, fallback: true };
+}
+
+// Decision 3: who is it? (Jev choice over remaining candidates.)
+function doGuess(session, reason) {
+  const cands = session.candidates.map(byId).filter(Boolean);
+  session.phase = 'guess';
+
+  const finish = (char, probs, ms, fallback, note) => {
+    session.guessId = char ? char.id : null;
+    logJev(session, {
+      kind: 'guess',
+      title: 'Jev made the final guess',
+      detail: char ? `${char.emoji || ''} ${char.name}`.trim() : 'no candidates',
+      probs: probs || [],
+      confidence: null,
+      ms: ms || 0,
+      fallback: !!fallback,
+      verdict: note || reason,
+    });
+    return {
+      type: 'guess',
+      guess: char ? { id: char.id, name: char.name, emoji: char.emoji } : null,
+      candidatesLeft: cands.length,
+      asked: Object.keys(session.asked).length,
+      reason,
+    };
+  };
+
+  if (!cands.length) return Promise.resolve(finish(null, [], 0, false, 'no candidates left'));
+  if (cands.length === 1) return Promise.resolve(finish(cands[0], [], 0, false, 'only one candidate left'));
+
+  if (jevAvailable() && cands.length <= JEV_MAX_OPTIONS) {
+    const criteria = {};
+    for (const c of cands) criteria[c.id] = c.name;
+    return jevCall({
+      state:
+        `20-questions character guessing game. Answer history:\n${historyText(session)}\n` +
+        `Pick who the player is thinking of.`,
+      questions: {
+        final_guess: {
+          type: 'choice',
+          instructions: 'Based on all the answers, pick the character the player is most likely thinking of.',
+          criteria,
+        },
+      },
+    }).then(({ data, ms, error }) => {
+      const ans = data && data.answers && data.answers.final_guess;
+      if (!error && ans && ans.choice && byId(ans.choice)) {
+        const probs = Object.entries(ans.probabilities || {})
+          .map(([id, p]) => ({ label: byId(id) ? byId(id).name : id, p }))
+          .sort((a, b) => b.p - a.p)
+          .slice(0, 5);
+        return finish(byId(ans.choice), probs, ms, false, reason);
+      }
+      if (error) console.error('[jev] guess failed, using local fallback');
+      return finish(cands[0], [], 0, true, 'jev unavailable, top candidate');
+    });
+  }
+  return Promise.resolve(finish(
+    cands[0], [], 0, true,
+    cands.length > JEV_MAX_OPTIONS ? 'too many candidates for one Jev call' : 'jev unavailable'
+  ));
+}
+
+// ---------- game logic ----------
+function bestQuestionInfoGain(session) {
+  const cands = session.candidates;
+  let best = null, bestScore = -1;
+  for (const q of questions) {
+    if (q.id in session.asked) continue;
+    let yes = 0;
+    for (const id of cands) {
+      const c = byId(id);
+      if (c && c.attrs && c.attrs[q.attr]) yes++;
+    }
+    const no = cands.length - yes;
+    const score = Math.min(yes, no); // split closest to 50/50
+    if (score > bestScore) { bestScore = score; best = q; }
+  }
+  return best;
+}
+
+function filterCandidates(session) {
+  let cands = allCharacters().map(c => c.id);
+  for (const [qid, ans] of Object.entries(session.asked)) {
+    if (ans === 'unknown') continue;
+    const q = questionById(qid);
+    if (!q) continue;
+    cands = cands.filter(id => {
+      const c = byId(id);
+      const has = !!(c && c.attrs && c.attrs[q.attr]);
+      return ans === 'yes' ? has : !has;
+    });
+  }
+  session.candidates = cands;
 }
 
 async function nextStep(session) {
-  const askedCount = Object.keys(session.asked).length;
-  const outOfQuestions = !questions.some((q) => !(q.id in session.asked));
-  // Only guess when there's a single clear winner, or we've truly run out of
-  // questions. Never guess early just because few candidates remain — keep digging.
-  if (session.candidates.length <= 1 || askedCount >= MAX_QUESTIONS || outOfQuestions) {
-    const guess = await pickGuess(session);
-    if (!guess) return { type: 'stumped', sessionId: session.id, yesAttrs: yesAttrsFrom(session) };
-    session.lastGuess = guess.id;
-    return {
-      type: 'guess',
-      id: guess.id,
-      name: guess.name,
-      emoji: guess.emoji,
-      kind: guess.kind,
-      sessionId: session.id,
-      progress: { asked: askedCount, remaining: session.candidates.length },
-    };
+  const asked = Object.keys(session.asked).length;
+  const remaining = session.candidates.length;
+  const outOfQuestions = !questions.some(q => !(q.id in session.asked));
+
+  let guessNow = false;
+  let reason = '';
+  if (remaining <= 1) {
+    guessNow = true; reason = 'single candidate';
+  } else if (asked >= MAX_QUESTIONS || outOfQuestions) {
+    guessNow = true; reason = 'out of questions';
+  } else if (jevAvailable() && asked >= MIN_QUESTIONS_BEFORE_GUESS) {
+    const g = await jevShouldGuess(session);
+    const pct = Math.round(g.p * 100);
+    logJev(session, {
+      kind: 'should_guess',
+      title: 'Jev decided: guess now or keep asking?',
+      detail: g.fallback ? 'Jev unreachable, keep asking' : `confidence ${pct}%`,
+      probs: g.fallback ? [] : [{ label: 'Guess now', p: g.p }, { label: 'Keep asking', p: 1 - g.p }],
+      confidence: g.p,
+      ms: g.ms,
+      fallback: g.fallback,
+      verdict: !g.fallback && g.p >= GUESS_CONFIDENCE_THRESHOLD ? 'Guessing now' : 'Asking another question',
+    });
+    if (!g.fallback && g.p >= GUESS_CONFIDENCE_THRESHOLD) {
+      guessNow = true; reason = `jev confident (${pct}%)`;
+    }
   }
+
+  if (guessNow) return doGuess(session, reason);
   const q = await pickNextQuestion(session);
-  if (!q) {
-    const guess = await pickGuess(session);
-    if (!guess) return { type: 'stumped', sessionId: session.id, yesAttrs: yesAttrsFrom(session) };
-    session.lastGuess = guess.id;
-    return {
-      type: 'guess',
-      id: guess.id,
-      name: guess.name,
-      emoji: guess.emoji,
-      kind: guess.kind,
-      sessionId: session.id,
-      progress: { asked: askedCount, remaining: session.candidates.length },
-    };
-  }
+  if (!q) return doGuess(session, 'no questions left');
   return {
     type: 'question',
-    question: q,
-    sessionId: session.id,
-    progress: { asked: askedCount, remaining: session.candidates.length },
+    question: { id: q.id, text: q.text },
+    candidates: session.candidates.length,
+    asked,
   };
 }
 
+// ---------- sessions ----------
+const sessions = new Map();
+function newSession() {
+  const s = {
+    id: crypto.randomUUID(),
+    asked: {},
+    history: [],
+    candidates: allCharacters().map(c => c.id),
+    phase: 'playing',
+    guessId: null,
+    jev: [],
+  };
+  sessions.set(s.id, s);
+  return s;
+}
+const getSession = id => sessions.get(id);
+
 // ---------- API ----------
 app.get('/api/status', (req, res) => {
-  res.json({ jevAvailable: jevAvailable(), jevError: jevLastError });
+  res.json({
+    ok: true,
+    jevAvailable: jevAvailable(),
+    jevError: jevLastError,
+    characters: allCharacters().length,
+    questions: questions.length,
+  });
 });
 
 app.post('/api/new', async (req, res) => {
-  const session = {
-    id: newSessionId(),
-    candidates: allCharacters().map((c) => c.id),
-    asked: {},
-    lastGuess: null,
-  };
-  sessions.set(session.id, session);
-  res.json(await nextStep(session));
+  const s = newSession();
+  logJev(s, {
+    kind: 'info',
+    title: 'New game started',
+    detail: `${s.candidates.length} characters in the world`,
+    probs: [],
+    confidence: null,
+    ms: 0,
+    fallback: false,
+  });
+  const step = await nextStep(s);
+  res.json({ sessionId: s.id, ...step, jev: s.jev });
 });
 
 app.post('/api/answer', async (req, res) => {
   const { sessionId, questionId, answer } = req.body || {};
-  const session = sessions.get(sessionId);
-  if (!session) return res.status(400).json({ error: 'unknown session' });
-  const q = questionById(questionId);
-  if (!q || !['yes', 'no', 'unknown'].includes(answer)) {
-    return res.status(400).json({ error: 'bad answer payload' });
+  const s = getSession(sessionId);
+  if (!s) return res.status(404).json({ error: 'session not found' });
+  if (s.phase !== 'playing') return res.status(400).json({ error: 'game already over' });
+  if (!questionById(questionId) || !['yes', 'no', 'unknown'].includes(answer)) {
+    return res.status(400).json({ error: 'bad request' });
   }
-  session.asked[questionId] = answer;
-  if (answer !== 'unknown') {
-    const filtered = session.candidates.filter((id) => {
-      const has = hasAttr(charById(id), q.attr);
-      return answer === 'yes' ? has : !has;
-    });
-    if (filtered.length > 0) session.candidates = filtered; // keep previous set if empty
-  }
-  res.json(await nextStep(session));
+  s.asked[questionId] = answer;
+  s.history.push({ question: questionById(questionId).text, answer });
+  filterCandidates(s);
+  const step = await nextStep(s);
+  res.json({ sessionId: s.id, ...step, jev: s.jev });
 });
 
-app.post('/api/guess-result', async (req, res) => {
+app.post('/api/guess-result', (req, res) => {
   const { sessionId, correct } = req.body || {};
-  const session = sessions.get(sessionId);
-  if (!session) return res.status(400).json({ error: 'unknown session' });
+  const s = getSession(sessionId);
+  if (!s) return res.status(404).json({ error: 'session not found' });
   if (correct) {
-    sessions.delete(sessionId);
-    return res.json({ type: 'win', sessionId });
+    s.phase = 'done';
+    const name = byId(s.guessId) ? byId(s.guessId).name : '';
+    logJev(s, { kind: 'info', title: 'Jev got it right', detail: name, probs: [], confidence: null, ms: 0, fallback: false });
+    return res.json({ type: 'win', guess: byId(s.guessId), jev: s.jev });
   }
-  if (session.lastGuess) {
-    session.candidates = session.candidates.filter((id) => id !== session.lastGuess);
-  }
-  session.lastGuess = null;
-  const askedCount = Object.keys(session.asked).length;
-  if (session.candidates.length === 0 || askedCount >= MAX_QUESTIONS) {
-    return res.json({ type: 'stumped', sessionId, yesAttrs: yesAttrsFrom(session) });
-  }
-  const step = await nextStep(session);
-  if (step.type === 'stumped') step.yesAttrs = yesAttrsFrom(session);
-  res.json(step);
+  s.phase = 'learn';
+  logJev(s, { kind: 'info', title: 'Jev missed — teach it', detail: 'add the character so it knows next time', probs: [], confidence: null, ms: 0, fallback: false });
+  res.json({ type: 'stumped', jev: s.jev });
 });
 
 app.post('/api/learn', (req, res) => {
-  const { name, kind, yesAttrs } = req.body || {};
-  if (!name || !['real', 'fictional'].includes(kind)) {
-    return res.status(400).json({ error: 'bad learn payload' });
-  }
+  const { sessionId, name, emoji } = req.body || {};
+  const s = getSession(sessionId);
+  if (!s) return res.status(404).json({ error: 'session not found' });
+  if (!name || !name.trim()) return res.status(400).json({ error: 'name required' });
   const attrs = {};
-  (Array.isArray(yesAttrs) ? yesAttrs : []).forEach((a) => {
-    attrs[a] = true;
-  });
+  for (const [qid, ans] of Object.entries(s.asked)) {
+    if (ans !== 'yes') continue;
+    const q = questionById(qid);
+    if (q) attrs[q.attr] = true;
+  }
   const entry = {
-    id: 'custom-' + Date.now().toString(36),
-    name: String(name).slice(0, 80),
-    emoji: '❓',
-    kind,
+    id: 'custom-' + crypto.randomUUID().slice(0, 8),
+    name: name.trim(),
+    emoji: (emoji || '').trim() || '❓',
+    kind: 'fictional',
     attrs,
   };
-  customCharacters.push(entry);
-  try {
-    fs.writeFileSync(
-      path.join(DATA_DIR, 'custom.json'),
-      JSON.stringify(customCharacters, null, 2) + '\n'
-    );
-  } catch {
-    return res.status(500).json({ error: 'could not save' });
-  }
-  res.json({ ok: true, id: entry.id });
+  custom.push(entry);
+  fs.writeFileSync(CUSTOM_PATH, JSON.stringify(custom, null, 2) + '\n');
+  s.phase = 'done';
+  logJev(s, { kind: 'info', title: 'Learned a new character', detail: entry.name, probs: [], confidence: null, ms: 0, fallback: false });
+  res.json({ ok: true, learned: entry.name, jev: s.jev });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(PORT, () => {
-  console.log(`akinator-game listening on http://localhost:${PORT} (jev: ${jevAvailable() ? 'on' : 'off'})`);
-});
+app.listen(PORT, () => console.log(`akinator-game on http://localhost:${PORT}`));
