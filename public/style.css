@@ -6,7 +6,7 @@ body {
   color: #f0e9d8;
   min-height: 100vh;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 24px;
 }
@@ -21,7 +21,7 @@ body {
     radial-gradient(1px 1px at 90% 55%, #fff7, transparent);
 }
 
-.wrap { position: relative; width: 100%; max-width: 540px; text-align: center; }
+.wrap { position: relative; width: 100%; max-width: 1060px; text-align: center; }
 
 .pill {
   display: inline-block;
@@ -32,6 +32,20 @@ body {
 }
 .pill.jev { color: #9df0b6; border-color: #9df0b655; background: #9df0b611; }
 .pill.local { color: #ffd98a; border-color: #ffd98a55; background: #ffd98a11; }
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 28px;
+  align-items: start;
+  text-align: center;
+}
+.game-col { min-width: 0; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+  .jev-col { order: 2; }
+}
 
 .screen.hidden { display: none; }
 
@@ -53,7 +67,7 @@ h2.guess-name { font-size: 36px; color: #f5d67b; margin: 6px 0; }
 .progress { font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #9d92c9; margin-bottom: 16px; }
 .kind { font-family: system-ui, sans-serif; font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: #9d92c9; margin-bottom: 24px; }
 .big-emoji { font-size: 84px; margin-bottom: 8px; }
-.hint { margin-top: 22px; font-size: 13px; color: #8f86b8; font-family: system-ui, sans-serif; }
+.hint { margin-top: 22px; font-size: 13px; color: #8f86b8; font-family: system-ui, sans-serif; line-height: 1.7; }
 
 .btnrow { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
@@ -77,14 +91,58 @@ h2.guess-name { font-size: 36px; color: #f5d67b; margin: 6px 0; }
   border: 1px solid #ffffff2c; background: #ffffff0d; color: #f0e9d8;
   font-size: 17px; font-family: system-ui, sans-serif; margin-bottom: 12px;
 }
-.kinds { display: flex; gap: 22px; margin-bottom: 6px; font-family: system-ui, sans-serif; font-size: 15px; }
-.kinds input { accent-color: #f5d67b; }
-.attrs { display: grid; gap: 8px; margin-bottom: 18px; max-height: 220px; overflow-y: auto; }
-.attrs label {
-  font-family: system-ui, sans-serif; font-size: 14px; color: #cfc6ec;
-  background: #ffffff0a; border: 1px solid #ffffff1a; border-radius: 10px; padding: 9px 12px;
-  cursor: pointer;
-}
-.attrs input { accent-color: #f5d67b; margin-right: 6px; }
 .form .btn { margin-top: 8px; }
 .form .tag.small { text-align: center; }
+
+/* ---------- Jev's mind panel ---------- */
+.jev-col {
+  text-align: left;
+  background: #ffffff08;
+  border: 1px solid #ffffff1c;
+  border-radius: 18px;
+  padding: 18px;
+  max-height: 78vh;
+  overflow-y: auto;
+  position: sticky;
+  top: 24px;
+}
+.jev-col h3 {
+  font-family: system-ui, sans-serif; font-size: 16px; color: #f5d67b;
+  margin-bottom: 4px;
+}
+.jev-col h3 .count {
+  font-size: 12px; color: #9df0b6; font-weight: 600; margin-left: 6px;
+}
+.jev-sub { font-family: system-ui, sans-serif; font-size: 12px; color: #8f86b8; margin-bottom: 14px; }
+.jev-empty { font-family: system-ui, sans-serif; font-size: 13px; color: #8f86b8; text-align: center; padding: 24px 8px; }
+
+.jev-entry {
+  background: #9df0b60d;
+  border: 1px solid #9df0b62e;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 10px;
+  font-family: system-ui, sans-serif;
+}
+.jev-entry.fallback {
+  background: #ffd98a0d;
+  border-color: #ffd98a2e;
+}
+.jhead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.jhead strong { font-size: 13px; color: #f0e9d8; }
+.jbadge, .fbadge {
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  padding: 3px 8px; border-radius: 999px; flex-shrink: 0;
+}
+.jbadge { color: #9df0b6; border: 1px solid #9df0b655; background: #9df0b611; }
+.fbadge { color: #ffd98a; border: 1px solid #ffd98a55; background: #ffd98a11; }
+.jdetail { font-size: 14px; color: #cfc6ec; margin-bottom: 8px; line-height: 1.45; }
+.jverdict { font-size: 13px; font-weight: 700; color: #f5d67b; margin-top: 8px; }
+.jmeta { font-size: 11px; color: #8f86b8; margin-top: 8px; }
+
+.bar { display: grid; grid-template-columns: 1fr 90px 38px; gap: 8px; align-items: center; margin: 5px 0; }
+.blabel { font-size: 11px; color: #cfc6ec; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btrack { height: 7px; background: #ffffff14; border-radius: 999px; overflow: hidden; }
+.bfill { height: 100%; background: linear-gradient(90deg, #57c98a, #9df0b6); border-radius: 999px; transition: width 0.4s; }
+.jev-entry.fallback .bfill { background: linear-gradient(90deg, #d9a93f, #ffd98a); }
+.bpct { font-size: 11px; color: #9d92c9; text-align: right; }
