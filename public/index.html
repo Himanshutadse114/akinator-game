@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mind Reader — Akinator-style guessing game</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="stars"></div>
+<main class="wrap">
+  <div id="brain-pill" class="pill">checking…</div>
+
+  <section id="screen-start" class="screen">
+    <div class="orb"></div>
+    <h1>Mind Reader</h1>
+    <p class="tag">Think of <strong>any character</strong> — real or fictional.<br>Answer my yes/no questions and I will read your mind.</p>
+    <button class="btn gold" onclick="startGame()">Start</button>
+    <p class="hint">Run with <code>TYPESAFE_API_KEY</code> set to let Jev pick the questions.</p>
+  </section>
+
+  <section id="screen-loading" class="screen hidden">
+    <div class="orb pulse"></div>
+    <p class="tag">Consulting the spirits…</p>
+  </section>
+
+  <section id="screen-question" class="screen hidden">
+    <p id="progress" class="progress"></p>
+    <h2 id="question-text" class="question"></h2>
+    <div class="btnrow">
+      <button class="btn yes" onclick="answer('yes')">Yes</button>
+      <button class="btn no" onclick="answer('no')">No</button>
+      <button class="btn ghost" onclick="answer('unknown')">Don't know</button>
+    </div>
+  </section>
+
+  <section id="screen-guess" class="screen hidden">
+    <div id="guess-emoji" class="big-emoji"></div>
+    <p class="tag">Is it…</p>
+    <h2 id="guess-name" class="guess-name"></h2>
+    <p id="guess-kind" class="kind"></p>
+    <div class="btnrow">
+      <button class="btn yes" onclick="guessResult(true)">Yes</button>
+      <button class="btn no" onclick="guessResult(false)">No</button>
+    </div>
+  </section>
+
+  <section id="screen-win" class="screen hidden">
+    <div class="orb"></div>
+    <h1>I read your mind!</h1>
+    <p class="tag">The spirits never lie.</p>
+    <button class="btn gold" onclick="startGame()">Play again</button>
+  </section>
+
+  <section id="screen-stumped" class="screen hidden">
+    <div class="orb dim"></div>
+    <h1>You stumped me!</h1>
+    <p class="tag">Teach me this character so I get it next time.</p>
+    <div class="form">
+      <input id="learn-name" type="text" maxlength="80" placeholder="Character name">
+      <div class="kinds">
+        <label><input type="radio" name="kind" value="real" checked> Real person</label>
+        <label><input type="radio" name="kind" value="fictional"> Fictional</label>
+      </div>
+      <p class="tag small">Which of these were true? (pre-filled from your answers)</p>
+      <div id="learn-attrs" class="attrs"></div>
+      <button class="btn gold" onclick="learn()">Teach me</button>
+      <p id="learn-msg" class="tag small"></p>
+      <button class="btn ghost" onclick="startGame()">Play again</button>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
