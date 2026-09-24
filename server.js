@@ -35,7 +35,10 @@ const hasAttr = (c, attr) => Boolean(c && c.attrs && c.attrs[attr]);
 
 const sessions = new Map();
 const newSessionId = () => crypto.randomBytes(8).toString('hex');
-const jevAvailable = () => Boolean(process.env.TYPESAFE_API_KEY);
+// Trim: on Windows `set KEY=value && npm start` can sneak a trailing space into the value.
+const JEV_KEY = (process.env.TYPESAFE_API_KEY || '').trim();
+const jevAvailable = () => Boolean(JEV_KEY);
+let jevLastError = null; // surfaced via /api/status so failures are visible, not silent
 
 // ---------- Jev helpers ----------
 async function jevCall(body) {
@@ -45,15 +48,23 @@ async function jevCall(body) {
     const res = await fetch(JEV_URL, {
       method: 'POST',
       headers: {
-        Authorization: 'Bearer ' + process.env.TYPESAFE_API_KEY,
+        Authorization: 'Bearer ' + JEV_KEY,
         'Content-Type': 'application/json',
       },
       signal: controller.signal,
       body: JSON.stringify(body),
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      const snippet = (await res.text()).slice(0, 200);
+      jevLastError = `HTTP ${res.status}: ${snippet}`;
+      console.warn(`[jev] API error ${res.status}: ${snippet}`);
+      return null;
+    }
+    jevLastError = null;
     return await res.json();
-  } catch {
+  } catch (err) {
+    jevLastError = `network/timeout: ${err && err.message ? err.message : err}`;
+    console.warn(`[jev] network error: ${jevLastError}`);
     return null; // network error / timeout -> caller falls back
   } finally {
     clearTimeout(timer);
@@ -208,7 +219,7 @@ async function nextStep(session) {
 
 // ---------- API ----------
 app.get('/api/status', (req, res) => {
-  res.json({ jevAvailable: jevAvailable() });
+  res.json({ jevAvailable: jevAvailable(), jevError: jevLastError });
 });
 
 app.post('/api/new', async (req, res) => {
